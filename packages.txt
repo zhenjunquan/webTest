@@ -1,4 +1,0 @@
-libreoffice
-default-jre
-fonts-liberation
-fonts-noto-cjk
