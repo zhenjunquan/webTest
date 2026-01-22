@@ -1,0 +1,9 @@
+name: pandoc-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - streamlit
+  - pandoc=3.1
+  - pandoc-crossref
