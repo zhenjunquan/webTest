@@ -57,13 +57,9 @@ else:
     CROSSREF_CMD = "pandoc-crossref"
 
 # ==========================================
-# 📂 2. 核心：通用文件处理函数
+# 📂 2. 文件处理函数
 # ==========================================
 def unpack_and_find_md(upload_file, temp_dir):
-    """
-    通用函数：解压 Zip，找到 MD 文件，返回路径。
-    """
-    # 1. 解压
     if upload_file.name.endswith('.zip'):
         zip_path = os.path.join(temp_dir, "upload.zip")
         with open(zip_path, "wb") as f:
@@ -74,12 +70,10 @@ def unpack_and_find_md(upload_file, temp_dir):
         except Exception as e:
             return None, None, f"解压失败: {e}"
     else:
-        # 单文件上传
         single_path = os.path.join(temp_dir, upload_file.name)
         with open(single_path, "wb") as f:
             f.write(upload_file.getvalue())
 
-    # 2. 查找 MD
     md_path = None
     work_dir = temp_dir
     
@@ -87,7 +81,7 @@ def unpack_and_find_md(upload_file, temp_dir):
         for file in files:
             if file.endswith(".md") and not file.startswith("__"):
                 md_path = os.path.join(root, file)
-                work_dir = root # 关键：将工作目录设为 MD 所在目录
+                work_dir = root 
                 return md_path, work_dir, None
     
     return None, None, "未找到 .md 文件"
@@ -99,7 +93,6 @@ def unpack_and_find_md(upload_file, temp_dir):
 st.set_page_config(page_title="Pandoc Pro", layout="wide", page_icon="👁️")
 st.title("Pandoc Pro: 预览与转换")
 
-# Session State 管理
 if 'preview_html' not in st.session_state: st.session_state['preview_html'] = None
 if 'md_content' not in st.session_state: st.session_state['md_content'] = ""
 if 'docx_data' not in st.session_state: st.session_state['docx_data'] = None
@@ -129,9 +122,47 @@ eqnIndexTemplate: ($$i$$)
 eqnPrefixTemplate: 式($$i$$)
 ---"""
 
-# Sidebar
+# --- JS 注入：悬浮缩放控制器 ---
+# 这段代码会被拼接到生成的 HTML 里，从而在预览框内部生成按钮
+ZOOM_SCRIPT = """
+<style>
+  #float-toolbar {
+    position: fixed; top: 10px; right: 20px; z-index: 9999;
+    background: rgba(255,255,255,0.9); padding: 5px 10px;
+    border: 1px solid #ccc; border-radius: 20px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    font-family: sans-serif; display: flex; align-items: center; gap: 8px;
+  }
+  .zoom-btn {
+    cursor: pointer; border: none; background: #eee;
+    width: 24px; height: 24px; border-radius: 50%; font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.2s;
+  }
+  .zoom-btn:hover { background: #ddd; }
+  #zoom-val { font-size: 12px; font-weight: bold; color: #555; width: 40px; text-align: center; }
+</style>
+
+<div id="float-toolbar">
+    <button class="zoom-btn" onclick="changeZoom(-0.1)" title="缩小">➖</button>
+    <span id="zoom-val">100%</span>
+    <button class="zoom-btn" onclick="changeZoom(0.1)" title="放大">➕</button>
+</div>
+
+<script>
+    let currentZoom = 1.0;
+    function changeZoom(delta) {
+        currentZoom += delta;
+        if (currentZoom < 0.2) currentZoom = 0.2;
+        // 兼容性缩放处理
+        document.body.style.zoom = currentZoom;
+        document.getElementById('zoom-val').innerText = Math.round(currentZoom * 100) + "%";
+    }
+</script>
+"""
+
 with st.sidebar:
-    st.header("1. 上传 Zip (含MD和图片)")
+    st.header("1. 上传 Zip")
     source_file = st.file_uploader("文件上传", type=["zip", "md"])
     
     st.header("2. 样式模板")
@@ -141,9 +172,13 @@ with st.sidebar:
     opt_toc = st.checkbox("生成目录", False)
     opt_num = st.checkbox("章节编号", True)
     output_name = st.text_input("输出文件名", "paper_final")
+    
+    st.divider()
+    st.write("🔧 **预览窗口设置**")
+    # 🔴 新增功能：外部控制预览框高度
+    iframe_height = st.slider("预览框高度 (px)", min_value=600, max_value=2000, value=1000, step=100)
 
-# Main Tabs
-tab1, tab2, tab3 = st.tabs(["👁️ 实时预览 (Source & Result)", "📥 转换下载 (Word)", "⚙️ 配置 (YAML)"])
+tab1, tab2, tab3 = st.tabs(["👁️ 实时预览", "📥 转换下载", "⚙️ 配置"])
 
 # --- Tab 3: Config ---
 with tab3:
@@ -152,22 +187,17 @@ with tab3:
 # --- Tab 1: Preview ---
 with tab1:
     if source_file:
-        col1, col2 = st.columns(2)
-        
-        # 预览按钮
         if st.button("🔄 刷新预览", type="primary", use_container_width=True):
-            with st.spinner("渲染预览中..."):
+            with st.spinner("渲染中..."):
                 with tempfile.TemporaryDirectory() as temp_dir:
                     md_path, work_dir, err = unpack_and_find_md(source_file, temp_dir)
                     
                     if err:
                         st.error(err)
                     else:
-                        # 1. 读取源码
                         with open(md_path, 'r', encoding='utf-8') as f:
                             st.session_state['md_content'] = f.read()
                         
-                        # 2. 生成 HTML 预览 (仿真 Word)
                         yaml_path = os.path.join(work_dir, "meta.yaml")
                         with open(yaml_path, "w", encoding="utf-8") as f:
                             f.write(yaml_content)
@@ -177,7 +207,7 @@ with tab1:
                             f"--metadata-file={yaml_path}",
                             "--filter", CROSSREF_CMD,
                             "--to", "html5",
-                            "--embed-resources", # 关键：把 Zip 里的图片嵌入 HTML
+                            "--embed-resources", 
                             "--standalone",
                             "--mathjax",
                             "--css", "https://cdn.jsdelivr.net/npm/github-markdown-css/github-markdown.min.css"
@@ -185,61 +215,59 @@ with tab1:
                         if opt_toc: cmd.append("--toc")
                         if opt_num: cmd.append("--number-sections")
                         
-                        # 这里的 cwd=work_dir 保证了图片路径正确
                         res = subprocess.run(cmd, cwd=work_dir, capture_output=True, text=True)
                         
                         if res.returncode == 0:
-                            st.session_state['preview_html'] = res.stdout
+                            # 🔴 核心修改：将 JS 缩放代码注入到 HTML 尾部
+                            st.session_state['preview_html'] = res.stdout + ZOOM_SCRIPT
                         else:
-                            st.error("预览渲染失败")
+                            st.error("预览失败")
                             st.code(res.stderr)
 
-        # 展示区域
+        col1, col2 = st.columns(2)
+        
         with col1:
-            st.subheader("Markdown 源码")
+            st.subheader("MD 源码")
             if st.session_state['md_content']:
-                st.text_area("MD 内容", st.session_state['md_content'], height=600)
+                with st.container(height=iframe_height, border=True):
+                    st.markdown(st.session_state['md_content'])
             else:
-                st.info("点击上方按钮加载源码")
+                st.info("👈 等待加载")
 
         with col2:
-            st.subheader("转换效果预览 (HTML仿真)")
+            st.subheader("HTML 仿真预览")
             if st.session_state['preview_html']:
-                # 使用 iframe 显示，模拟文档效果
-                components.html(st.session_state['preview_html'], height=600, scrolling=True)
+                # 🔴 核心修改：使用 slider 的值动态控制高度
+                components.html(st.session_state['preview_html'], height=iframe_height, scrolling=True)
             else:
-                st.info("点击上方按钮生成预览")
+                st.info("👈 等待加载")
     else:
         st.info("请先上传文件")
 
 # --- Tab 2: Download ---
 with tab2:
-    st.write("### 确认无误后，生成最终 Word 文档")
+    st.write("### 生成 Word 文档")
     if source_file:
-        # 分离的转换按钮
         if st.button("🚀 开始转换 Word", type="primary"):
             with st.spinner("正在生成 DOCX..."):
                 with tempfile.TemporaryDirectory() as temp_dir:
                     md_path, work_dir, err = unpack_and_find_md(source_file, temp_dir)
                     
                     if not err:
-                        # 写入配置
                         yaml_path = os.path.join(work_dir, "meta.yaml")
                         with open(yaml_path, "w", encoding="utf-8") as f: f.write(yaml_content)
                         
-                        # 写入模板
                         cmd_template = []
                         if template_file:
                             tpl_path = os.path.join(work_dir, "template.docx")
                             with open(tpl_path, "wb") as f: f.write(template_file.getvalue())
                             cmd_template = [f"--reference-doc={tpl_path}"]
 
-                        # 运行 Pandoc
                         cmd = [
                             "pandoc", md_path,
                             f"--metadata-file={yaml_path}",
                             "--filter", CROSSREF_CMD,
-                            "--resource-path=.", # 强制搜索当前目录图片
+                            "--resource-path=.", 
                             "-o", "output.docx"
                         ]
                         if opt_toc: cmd.append("--toc")
@@ -252,12 +280,11 @@ with tab2:
                             out_path = os.path.join(work_dir, "output.docx")
                             with open(out_path, "rb") as f:
                                 st.session_state['docx_data'] = f.read()
-                            st.success("转换成功！请点击下方按钮下载。")
+                            st.success("转换成功！")
                         else:
                             st.error("转换失败")
                             st.code(res.stderr)
 
-        # 独立的下载按钮 (解决点击无反应问题)
         if st.session_state['docx_data']:
             full_name = output_name if output_name.endswith(".docx") else output_name + ".docx"
             st.download_button(
