@@ -1,12 +1,12 @@
 import streamlit as st
 import subprocess
 import os
-import shutil
 import tarfile
 import urllib.request
 import tempfile
 import sys
 import zipfile
+import shutil
 
 # ==========================================
 # 🛠️ 1. 环境自动配置 (保持不变)
@@ -48,7 +48,6 @@ def install_linux_tools():
     subprocess.run(["chmod", "+x", crossref_exe])
     return bin_dir
 
-# 环境检测
 if sys.platform.startswith("linux"):
     local_bin = install_linux_tools()
     os.environ["PATH"] = local_bin + os.pathsep + os.environ["PATH"]
@@ -57,13 +56,18 @@ else:
     CROSSREF_CMD = "pandoc-crossref"
 
 # ==========================================
-# 🎨 2. 界面布局与逻辑
+# 🎨 2. 界面与核心逻辑
 # ==========================================
 
 st.set_page_config(page_title="Pandoc Pro", layout="wide", page_icon="📑")
-st.title("📑 Markdown 转 Word (Zip版)")
+st.title("📑 Markdown 转 Word (修复版)")
 
-# 默认配置
+# 初始化 Session State (解决下载没反应的问题)
+if 'convert_success' not in st.session_state:
+    st.session_state['convert_success'] = False
+    st.session_state['docx_data'] = None
+    st.session_state['log_info'] = ""
+
 DEFAULT_YAML = """---
 lang: en
 chapters: true
@@ -89,134 +93,134 @@ eqnIndexTemplate: ($$i$$)
 eqnPrefixTemplate: 式($$i$$)
 ---"""
 
-# --- 侧边栏 ---
 with st.sidebar:
-    st.header("⚙️ 1. 上传")
-    st.info("💡 推荐：将 .md 和图片打包成 Zip 上传，可自动保持路径结构。")
+    st.header("📂 1. 文件上传")
+    st.info("💡 请上传 Zip 包，包含 .md 文件和所有图片文件夹。")
+    source_file = st.file_uploader("上传 Zip 文件", type=["zip"])
     
-    upload_type = st.radio("选择上传方式", ["上传 Zip 压缩包 (推荐)", "仅上传单个 MD 文件"])
-    
-    source_file = None
-    if upload_type == "上传 Zip 压缩包 (推荐)":
-        source_file = st.file_uploader("上传包含 MD 和图片的 Zip", type=["zip"])
-    else:
-        source_file = st.file_uploader("上传 Markdown 文件", type=["md"])
-    
-    st.header("🎨 2. 样式")
+    st.header("🎨 2. 样式 & 选项")
     template_file = st.file_uploader("样式模板 (templates.docx)", type=["docx"])
     
-    st.header("🔧 3. 选项")
     opt_toc = st.checkbox("生成目录 (--toc)", False)
     opt_num = st.checkbox("章节编号 (--number-sections)", True)
     output_name = st.text_input("输出文件名", "paper_final")
 
-# --- 主界面 ---
-# 使用 Tabs 分割预览和配置
-tab1, tab2 = st.tabs(["👁️ 内容预览 & 转换", "⚙️ Meta 配置"])
+# --- 主逻辑 ---
+tab1, tab2 = st.tabs(["🚀 转换 & 下载", "⚙️ 配置 (YAML)"])
 
 with tab2:
-    yaml_content = st.text_area("编辑 YAML 配置", DEFAULT_YAML, height=400)
+    yaml_content = st.text_area("编辑 YAML", DEFAULT_YAML, height=400)
 
 with tab1:
     if source_file:
-        # 创建临时文件夹来解压或保存文件
-        with tempfile.TemporaryDirectory() as temp_dir:
-            md_path = ""
+        # Step 1: 转换按钮
+        if st.button("🔄 开始转换 (第一步)", type="primary"):
+            # 清除旧状态
+            st.session_state['convert_success'] = False
+            st.session_state['docx_data'] = None
             
-            # --- 核心逻辑：文件处理 ---
-            if source_file.name.endswith('.zip'):
-                # 1. 解压 Zip
-                zip_path = os.path.join(temp_dir, "upload.zip")
-                with open(zip_path, "wb") as f:
-                    f.write(source_file.getvalue())
-                
-                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                    zip_ref.extractall(temp_dir)
-                
-                # 2. 自动寻找 .md 文件
-                found_md = False
-                for root, dirs, files in os.walk(temp_dir):
-                    for file in files:
-                        if file.endswith(".md"):
-                            md_path = os.path.join(root, file)
-                            found_md = True
-                            break # 默认取第一个 md
-                    if found_md: break
-                
-                if not found_md:
-                    st.error("❌ Zip 包里没找到 .md 文件！")
-                    st.stop()
-            else:
-                # 普通 MD 上传
-                md_path = os.path.join(temp_dir, source_file.name)
-                with open(md_path, "wb") as f:
-                    f.write(source_file.getvalue())
+            with st.spinner("正在解压并编译..."):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    # 1. 解压 Zip
+                    zip_path = os.path.join(temp_dir, "upload.zip")
+                    with open(zip_path, "wb") as f:
+                        f.write(source_file.getvalue())
+                    
+                    try:
+                        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                            zip_ref.extractall(temp_dir)
+                    except Exception as e:
+                        st.error(f"Zip 解压失败: {e}")
+                        st.stop()
 
-            # --- 👁️ 功能：Markdown 预览 ---
-            try:
-                with open(md_path, "r", encoding="utf-8") as f:
-                    md_content = f.read()
-                
-                st.subheader(f"📄 预览: {os.path.basename(md_path)}")
-                with st.expander("点击展开/折叠 Markdown 内容预览", expanded=True):
-                    st.markdown(md_content)
-                    # st.text_area("源码预览", md_content, height=200) # 也可以用纯文本显示
-            except Exception as e:
-                st.warning(f"无法预览文件内容: {e}")
+                    # 2. 深度搜索 .md 文件 (解决路径问题)
+                    md_path = None
+                    md_rel_dir = "" # MD 文件所在的文件夹
+                    
+                    file_structure = [] # 用于调试
+                    for root, dirs, files in os.walk(temp_dir):
+                        for file in files:
+                            file_structure.append(os.path.join(root, file))
+                            if file.endswith(".md") and not file.startswith("__"):
+                                md_path = os.path.join(root, file)
+                                # 关键：记录 MD 文件所在的目录
+                                md_rel_dir = root 
+                                break
+                        if md_path: break
+                    
+                    if not md_path:
+                        st.error("❌ Zip 包里没找到 .md 文件！")
+                        st.stop()
 
-            # --- 转换按钮 ---
-            st.write("---")
-            if st.button("🚀 开始转换 Word", type="primary"):
-                with st.spinner("正在调用 Pandoc 引擎..."):
-                    # 写入 YAML
-                    yaml_path = os.path.join(temp_dir, "meta.yaml")
+                    # 3. 准备资源路径
+                    # 告诉 Pandoc 在 MD 文件所在的目录找图片
+                    # 并显式添加 --resource-path
+                    
+                    # 保存 YAML
+                    yaml_path = os.path.join(md_rel_dir, "meta.yaml")
                     with open(yaml_path, "w", encoding="utf-8") as f:
                         f.write(yaml_content)
                     
-                    # 写入模板
+                    # 保存模板
                     cmd_template = []
                     if template_file:
-                        tpl_path = os.path.join(temp_dir, "template.docx")
+                        tpl_path = os.path.join(md_rel_dir, "template.docx")
                         with open(tpl_path, "wb") as f:
                             f.write(template_file.getvalue())
                         cmd_template = [f"--reference-doc={tpl_path}"]
 
-                    # 构建命令
-                    # 注意：cwd=os.path.dirname(md_path) 确保 pandoc 在 md 文件所在的目录运行
-                    # 这样 md 里的相对路径引用 (如 images/1.png) 才能生效
-                    work_dir = os.path.dirname(md_path)
-                    
+                    # 4. 构建命令
                     cmd = [
                         "pandoc", 
-                        md_path, 
-                        f"--metadata-file={yaml_path}", 
+                        os.path.basename(md_path), # 只传文件名
+                        f"--metadata-file=meta.yaml", 
                         "--filter", CROSSREF_CMD,
+                        "--resource-path=.", # 强制在当前目录找图片
                         "-o", "output.docx"
                     ]
                     if opt_toc: cmd.append("--toc")
                     if opt_num: cmd.append("--number-sections")
                     cmd.extend(cmd_template)
 
-                    # 执行
-                    res = subprocess.run(cmd, cwd=work_dir, capture_output=True, text=True)
+                    # 5. 执行 (关键：cwd 设为 MD 文件所在的目录)
+                    res = subprocess.run(cmd, cwd=md_rel_dir, capture_output=True, text=True)
 
                     if res.returncode == 0:
-                        out_path = os.path.join(work_dir, "output.docx")
+                        out_path = os.path.join(md_rel_dir, "output.docx")
                         with open(out_path, "rb") as f:
-                            file_data = f.read()
+                            st.session_state['docx_data'] = f.read()
+                        st.session_state['convert_success'] = True
                         
-                        st.success("✅ 转换成功！")
+                        # 记录一些调试信息给用户看
+                        msg = f"✅ 转换成功！\n\n📂 **工作目录**: `{md_rel_dir}`\n📄 **处理文件**: `{os.path.basename(md_path)}`"
+                        # 检查图片文件夹是否存在
+                        if os.path.exists(os.path.join(md_rel_dir, "images")):
+                            msg += "\n🖼️ **检测**: 发现 `images` 文件夹，图片应该正常。"
+                        elif os.path.exists(os.path.join(md_rel_dir, "assets")):
+                            msg += "\n🖼️ **检测**: 发现 `assets` 文件夹，图片应该正常。"
+                        else:
+                            msg += "\n⚠️ **注意**: 未在 MD 同级目录发现 `images` 或 `assets` 文件夹。如果你的文档有图片，请检查 Zip 结构。"
                         
-                        # --- 👁️ 功能：Word 简易信息预览 ---
-                        # 浏览器无法直接预览 Word 内容，但我们可以显示文件信息
-                        file_size = len(file_data) / 1024
-                        st.info(f"生成文件大小: {file_size:.2f} KB")
-                        
-                        full_name = output_name if output_name.endswith(".docx") else output_name + ".docx"
-                        st.download_button("📥 点击下载 Word 文档", file_data, full_name, type="primary")
+                        st.session_state['log_info'] = msg
                     else:
                         st.error("❌ 转换失败")
                         st.code(res.stderr)
+                        st.warning("调试：Zip 包内的文件结构如下：")
+                        st.json(file_structure)
 
+        # Step 2: 下载按钮 (独立显示)
+        if st.session_state['convert_success'] and st.session_state['docx_data']:
+            st.success(st.session_state['log_info'])
+            
+            full_name = output_name if output_name.endswith(".docx") else output_name + ".docx"
+            
+            # 这里是解决“点击无反应”的关键：直接提供数据，不再运行逻辑
+            st.download_button(
+                label=f"📥 点击下载 Word 文档 ({full_name})",
+                data=st.session_state['docx_data'],
+                file_name=full_name,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                type="primary"
+            )
     else:
-        st.info("👈 请在左侧上传文件 (支持 .md 或包含资源的 .zip)")
+        st.info("👈 请先上传 Zip 文件")
