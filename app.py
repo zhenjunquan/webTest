@@ -11,7 +11,7 @@ from docx import Document
 from docx.shared import Pt, RGBColor
 
 # ==========================================
-# 🛠️ 1. 环境配置 (保持不变)
+# 🛠️ 1. 环境配置
 # ==========================================
 def install_linux_tools():
     base_dir = os.getcwd()
@@ -55,7 +55,7 @@ else:
     CROSSREF_CMD = "pandoc-crossref"
 
 # ==========================================
-# 🤖 2. AI 核心 (保留你的 AI 功能)
+# 🤖 2. AI 核心
 # ==========================================
 import openai
 
@@ -81,11 +81,11 @@ def ask_ai_for_template_code(api_key, base_url, user_req):
     except: return None
 
 # ==========================================
-# 🎨 3. 样式定义 (A4 仿真容器)
+# 🎨 3. 样式定义
 # ==========================================
 A4_CSS = """
 <style>
-    body { background-color: #525659; padding: 40px 0; display: flex; justify-content: center; }
+    body { background-color: #525659; padding: 40px 0; display: flex; justify-content: center; margin: 0; }
     .markdown-body {
         width: 21cm; min-height: 29.7cm; padding: 2cm;
         background: white; color: black;
@@ -121,16 +121,18 @@ function z(d){
 # ==========================================
 st.set_page_config(page_title="Pandoc Pro", layout="wide", page_icon="📄")
 
+# --- Session State 初始化 (关键修复点) ---
 if 'view_mode' not in st.session_state: st.session_state['view_mode'] = 'setup'
 if 'preview_html' not in st.session_state: st.session_state['preview_html'] = None
 if 'docx_data' not in st.session_state: st.session_state['docx_data'] = None
 if 'yaml_content' not in st.session_state: st.session_state['yaml_content'] = ""
+# 🔴 修复：初始化文件名，防止 NameError
+if 'output_filename' not in st.session_state: st.session_state['output_filename'] = "paper_final"
 
 # ----------------- 视图 1: 配置页 -----------------
 if st.session_state['view_mode'] == 'setup':
-    st.title("📄 Pandoc 文档工场 (Word逆向预览版)")
+    st.title("📄 Pandoc 文档工场 (修复版)")
     
-    # AI 区域 (省略折叠，保持代码简洁，你需要时可把上面的 AI 逻辑加回来)
     with st.expander("🤖 AI 辅助配置 (可选)", expanded=False):
         api_key = st.text_input("OpenAI Key", type="password")
         base_url = st.text_input("Base URL", value="https://api.openai.com/v1")
@@ -144,7 +146,9 @@ if st.session_state['view_mode'] == 'setup':
     with col1:
         source_file = st.file_uploader("📂 上传 Zip/MD", type=["zip", "md"])
         template_file = st.file_uploader("🎨 样式模板 (.docx)", type=["docx"])
-        output_name = st.text_input("输出文件名", "paper_final")
+        
+        # 🔴 修复：使用 key 直接绑定 session_state，这样输入的值会被自动记住
+        st.text_input("输出文件名", key="output_filename") 
     
     with col2:
         if not st.session_state['yaml_content']:
@@ -156,7 +160,7 @@ if st.session_state['view_mode'] == 'setup':
         if source_file:
             with st.spinner("1. 生成 Word -> 2. 解析 Word 为 HTML..."):
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    # 解压逻辑
+                    # 解压
                     if source_file.name.endswith('.zip'):
                         zip_path = os.path.join(temp_dir, "upload.zip")
                         with open(zip_path, "wb") as f: f.write(source_file.getvalue())
@@ -185,15 +189,13 @@ if st.session_state['view_mode'] == 'setup':
                             with open(tpl_path, "wb") as f: f.write(template_file.getvalue())
                             cmd_opts = [f"--reference-doc={tpl_path}"]
 
-                        # ==========================================
-                        # 🌟 核心步骤 1: 生成 DOCX (Pandoc)
-                        # ==========================================
+                        # 生成 DOCX
                         docx_out = os.path.join(work_dir, "output.docx")
                         cmd_build = [
                             "pandoc", md_path, 
                             "--metadata-file=meta.yaml", 
                             "--filter", CROSSREF_CMD,
-                            "--resource-path=.", # 确保图片能找到
+                            "--resource-path=.",
                             "-o", docx_out
                         ] + cmd_opts
                         
@@ -202,15 +204,11 @@ if st.session_state['view_mode'] == 'setup':
                         if os.path.exists(docx_out):
                             with open(docx_out, "rb") as f: st.session_state['docx_data'] = f.read()
                             
-                            # ==========================================
-                            # 🌟 核心步骤 2: DOCX -> HTML (逆向预览)
-                            # ==========================================
-                            # 使用 Pandoc 把刚才生成的 Word 转回 HTML
-                            # --embed-resources: 把 Word 里的图片扣出来嵌进 HTML
+                            # DOCX -> HTML (逆向预览)
                             cmd_preview = [
-                                "pandoc", docx_out, # 输入刚才的 Word
-                                "-f", "docx",       # 强制指定输入格式为 docx
-                                "-t", "html5",      # 输出为 html
+                                "pandoc", docx_out, 
+                                "-f", "docx",
+                                "-t", "html5",
                                 "--embed-resources", 
                                 "--standalone",
                                 "--mathjax"
@@ -219,7 +217,6 @@ if st.session_state['view_mode'] == 'setup':
                             res_html = subprocess.run(cmd_preview, cwd=work_dir, capture_output=True, text=True)
                             
                             if res_html.returncode == 0:
-                                # 包装一下 HTML，加上 A4 样式
                                 final_html = A4_CSS + '<div class="markdown-body">' + res_html.stdout + '</div>' + ZOOM_SCRIPT
                                 st.session_state['preview_html'] = final_html
                                 st.session_state['view_mode'] = 'preview'
@@ -239,11 +236,13 @@ elif st.session_state['view_mode'] == 'preview':
             st.rerun()
         st.divider()
         if st.session_state['docx_data']:
-            fn = output_name if output_name.endswith(".docx") else output_name+".docx"
+            # 🔴 修复：从 session_state 获取文件名
+            name = st.session_state.get('output_filename', 'paper_final')
+            fn = name if name.endswith(".docx") else name+".docx"
+            
             st.download_button("📥 下载 Word 文档", st.session_state['docx_data'], fn, type="primary")
             st.info("提示：此预览是由生成的 Word 文档反向转换而来，所见即所得。")
 
-    # 隐藏 Header 并展示全屏 HTML
     st.markdown("""<style>.block-container { padding-top: 1rem; padding-bottom: 0rem; } header { visibility: hidden; }</style>""", unsafe_allow_html=True)
     if st.session_state['preview_html']:
         components.html(st.session_state['preview_html'], height=1200, scrolling=True)
