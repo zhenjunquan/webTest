@@ -7,23 +7,21 @@ import tempfile
 import sys
 import zipfile
 import streamlit.components.v1 as components
+from docx import Document
+from docx.shared import Pt, RGBColor
 
 # ==========================================
 # 🛠️ 1. 环境配置 (保持不变)
 # ==========================================
 def install_linux_tools():
-    """云端自动安装 Pandoc"""
     base_dir = os.getcwd()
     bin_dir = os.path.join(base_dir, "bin")
     pandoc_exe = os.path.join(bin_dir, "pandoc")
     crossref_exe = os.path.join(bin_dir, "pandoc-crossref")
-
-    if os.path.exists(pandoc_exe) and os.path.exists(crossref_exe):
-        return bin_dir
-
-    st.toast("正在初始化 Pandoc...", icon="🚀")
+    if os.path.exists(pandoc_exe) and os.path.exists(crossref_exe): return bin_dir
     if not os.path.exists(bin_dir): os.makedirs(bin_dir)
-
+    
+    # 下载 Pandoc
     PANDOC_VER = "3.1.12.3"
     p_url = f"https://github.com/jgm/pandoc/releases/download/{PANDOC_VER}/pandoc-{PANDOC_VER}-linux-amd64.tar.gz"
     try:
@@ -33,7 +31,8 @@ def install_linux_tools():
                 if m.name.endswith("bin/pandoc"):
                     m.name = "pandoc"; t.extract(m, bin_dir)
     except: pass
-
+    
+    # 下载 Crossref
     CROSSREF_VER = "0.3.17.1a"
     c_url = f"https://github.com/lierdakil/pandoc-crossref/releases/download/v{CROSSREF_VER}/pandoc-crossref-Linux.tar.xz"
     try:
@@ -56,272 +55,195 @@ else:
     CROSSREF_CMD = "pandoc-crossref"
 
 # ==========================================
-# 📂 2. 文件解压逻辑
+# 🤖 2. AI 核心 (保留你的 AI 功能)
 # ==========================================
-def unpack_and_find_md(upload_file, temp_dir):
-    if upload_file.name.endswith('.zip'):
-        zip_path = os.path.join(temp_dir, "upload.zip")
-        with open(zip_path, "wb") as f:
-            f.write(upload_file.getvalue())
-        try:
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(temp_dir)
-        except Exception as e:
-            return None, None, f"解压失败: {e}"
-    else:
-        single_path = os.path.join(temp_dir, upload_file.name)
-        with open(single_path, "wb") as f:
-            f.write(upload_file.getvalue())
+import openai
 
-    for root, dirs, files in os.walk(temp_dir):
-        for file in files:
-            if file.endswith(".md") and not file.startswith("__"):
-                return os.path.join(root, file), root, None
-    return None, None, "未找到 .md 文件"
+def ask_ai_for_yaml(api_key, base_url, user_req):
+    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": f"生成Pandoc meta.yaml内容，要求：{user_req}。只返回YAML。"}]
+        )
+        return response.choices[0].message.content
+    except Exception as e: return f"Error: {e}"
+
+def ask_ai_for_template_code(api_key, base_url, user_req):
+    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    prompt = f"写Python代码使用python-docx生成generated_template.docx，样式要求：{user_req}。只返回代码。"
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
+    except: return None
 
 # ==========================================
-# 🎨 3. 页面样式定义 (A4 & 全屏优化)
+# 🎨 3. 样式定义 (A4 仿真容器)
 # ==========================================
-
-# A4 纸张 CSS
 A4_CSS = """
 <style>
-    body {
-        background-color: #525659; /* 深色背景，护眼且突出白纸 */
-        display: flex;
-        justify-content: center;
-        padding: 40px 0;
-        margin: 0;
-    }
+    body { background-color: #525659; padding: 40px 0; display: flex; justify-content: center; }
     .markdown-body {
-        box-sizing: border-box;
-        width: 21cm; /* A4 宽度 */
-        min-height: 29.7cm; /* A4 高度 */
-        margin: 0 auto;
-        padding: 2.54cm; /* 标准页边距 */
-        background-color: white;
-        box-shadow: 0 0 10px rgba(0,0,0,0.5);
-        color: #000;
-        font-family: "Times New Roman", "SimSun", serif; /* 衬线体更像论文 */
+        width: 21cm; min-height: 29.7cm; padding: 2cm;
+        background: white; color: black;
+        font-family: "Times New Roman", "SimSun", serif;
+        box-shadow: 0 0 15px rgba(0,0,0,0.5);
     }
-    /* 适配图片 */
-    img { max-width: 100%; }
+    img { max-width: 100%; height: auto; }
+    table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background-color: #f2f2f2; }
 </style>
 """
 
-# JS 缩放脚本
 ZOOM_SCRIPT = """
-<style>
-  #float-toolbar {
-    position: fixed; top: 20px; right: 30px; z-index: 10000;
-    background: rgba(0,0,0,0.7); padding: 8px 15px;
-    border-radius: 30px; display: flex; align-items: center; gap: 15px;
-    color: white; backdrop-filter: blur(5px);
-  }
-  .zoom-btn {
-    cursor: pointer; border: none; background: transparent; color: white;
-    font-size: 18px; display: flex; align-items: center; font-weight: bold;
-  }
-  .zoom-btn:hover { color: #4CAF50; }
-  #zoom-val { font-size: 14px; font-family: monospace; min-width: 45px; text-align: center; }
-</style>
-
-<div id="float-toolbar">
-    <button class="zoom-btn" onclick="changeZoom(-0.1)">－</button>
-    <span id="zoom-val">100%</span>
-    <button class="zoom-btn" onclick="changeZoom(0.1)">＋</button>
+<div style="position:fixed;top:20px;right:30px;background:rgba(0,0,0,0.8);padding:8px;border-radius:20px;color:white;z-index:9999;">
+    <button onclick="z(-0.1)" style="background:none;border:none;color:white;font-size:18px;cursor:pointer">－</button>
+    <span id="zv">100%</span>
+    <button onclick="z(0.1)" style="background:none;border:none;color:white;font-size:18px;cursor:pointer">＋</button>
 </div>
-
 <script>
-    let currentZoom = 1.0;
-    function changeZoom(delta) {
-        currentZoom += delta;
-        if (currentZoom < 0.3) currentZoom = 0.3;
-        
-        // 核心缩放逻辑
-        const body = document.querySelector('.markdown-body');
-        if(body) {
-            body.style.transform = `scale(${currentZoom})`;
-            body.style.transformOrigin = 'top center';
-            // 动态调整底部留白，防止缩放后重叠
-            body.style.marginBottom = `${(currentZoom - 1) * 29.7}cm`; 
-        }
-        document.getElementById('zoom-val').innerText = Math.round(currentZoom * 100) + "%";
-    }
+let c=1.0;
+function z(d){
+    c+=d; if(c<0.3)c=0.3;
+    let b=document.querySelector('.markdown-body');
+    if(b){ b.style.transform=`scale(${c})`; b.style.transformOrigin='top center'; b.style.marginBottom=`${(c-1)*29.7}cm`; }
+    document.getElementById('zv').innerText=Math.round(c*100)+"%";
+}
 </script>
 """
 
 # ==========================================
-# 🚀 4. 主程序逻辑
+# 🚀 4. 主程序
 # ==========================================
+st.set_page_config(page_title="Pandoc Pro", layout="wide", page_icon="📄")
 
-st.set_page_config(page_title="Pandoc Pro", layout="wide", page_icon="📝")
-
-# --- Session State 初始化 ---
-if 'view_mode' not in st.session_state: st.session_state['view_mode'] = 'setup' # setup 或 preview
+if 'view_mode' not in st.session_state: st.session_state['view_mode'] = 'setup'
 if 'preview_html' not in st.session_state: st.session_state['preview_html'] = None
 if 'docx_data' not in st.session_state: st.session_state['docx_data'] = None
-if 'file_name' not in st.session_state: st.session_state['file_name'] = "paper_final"
+if 'yaml_content' not in st.session_state: st.session_state['yaml_content'] = ""
 
-DEFAULT_YAML = """---
-lang: en
-chapters: true
-linkReferences: true
-chapDelim: "-"
-figPrefix: 
-figureTemplate: 图 $$i$$. $$t$$
-tblPrefix: 
-tableTemplate: Table $$i$$ $$t$$
-secPrefix: 节
-reference-section-title: 参考文献
-reference-section-number: false
-link-citations: true
-eqnos: true
-eqnPrefix: 式
-autoEqnLabels: true
-tableEqns: true
-eqnBlockTemplate: |
-   `<w:pPr><w:jc w:val="center"/><w:spacing w:line="400" w:lineRule="atLeast"/><w:tabs><w:tab w:val="center" w:leader="none" w:pos="4478" /><w:tab w:val="right" w:leader="none" w:pos="10433" /></w:tabs></w:pPr><w:r><w:tab /></w:r>`{=openxml} $$t$$ `<w:r><w:tab /></w:r>`{=openxml} $$i$$
-eqnBlockInlineMath: true
-equationNumberTeX: \\\\tag
-eqnIndexTemplate: ($$i$$)
-eqnPrefixTemplate: 式($$i$$)
----"""
-
-# ==========================================
-# 📺 视图 1：配置与上传页
-# ==========================================
+# ----------------- 视图 1: 配置页 -----------------
 if st.session_state['view_mode'] == 'setup':
-    st.title("Pandoc Pro: 文档编译平台")
-    st.markdown("上传 Markdown/Zip，生成 A4 仿真预览与 Word 文档。")
+    st.title("📄 Pandoc 文档工场 (Word逆向预览版)")
+    
+    # AI 区域 (省略折叠，保持代码简洁，你需要时可把上面的 AI 逻辑加回来)
+    with st.expander("🤖 AI 辅助配置 (可选)", expanded=False):
+        api_key = st.text_input("OpenAI Key", type="password")
+        base_url = st.text_input("Base URL", value="https://api.openai.com/v1")
+        req = st.text_input("描述 YAML 配置")
+        if st.button("生成 YAML") and api_key:
+            res = ask_ai_for_yaml(api_key, base_url, req)
+            if "Error" not in res: st.session_state['yaml_content'] = res.replace("```yaml","").replace("```","").strip()
 
-    col_conf, col_yaml = st.columns([1, 1.5])
+    col1, col2 = st.columns([1, 1.2])
+    
+    with col1:
+        source_file = st.file_uploader("📂 上传 Zip/MD", type=["zip", "md"])
+        template_file = st.file_uploader("🎨 样式模板 (.docx)", type=["docx"])
+        output_name = st.text_input("输出文件名", "paper_final")
+    
+    with col2:
+        if not st.session_state['yaml_content']:
+            st.session_state['yaml_content'] = "---\nlang: en\neqnos: true\n---"
+        yaml_content = st.text_area("Meta.yaml", st.session_state['yaml_content'], height=300)
 
-    with col_conf:
-        st.subheader("1. 文件与模板")
-        source_file = st.file_uploader("📂 上传 Zip (含MD和图片)", type=["zip", "md"])
-        template_file = st.file_uploader("🎨 样式模板 (templates.docx)", type=["docx"])
-        
-        st.subheader("2. 输出设置")
-        opt_toc = st.checkbox("生成目录 (--toc)", False)
-        opt_num = st.checkbox("章节编号 (--number-sections)", True)
-        output_name = st.text_input("输出文件名", st.session_state['file_name'])
-
-    with col_yaml:
-        st.subheader("3. 元数据配置")
-        yaml_content = st.text_area("Meta.yaml", DEFAULT_YAML, height=450)
-
-    # 底部大按钮
     st.divider()
-    if st.button("🚀 生成预览 & 转换", type="primary", use_container_width=True):
-        if not source_file:
-            st.error("请先上传文件！")
-        else:
-            st.session_state['file_name'] = output_name # 记住文件名
-            with st.spinner("正在启动 Pandoc 引擎..."):
+    if st.button("🚀 生成 Word 并预览", type="primary", use_container_width=True):
+        if source_file:
+            with st.spinner("1. 生成 Word -> 2. 解析 Word 为 HTML..."):
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    md_path, work_dir, err = unpack_and_find_md(source_file, temp_dir)
-                    if err:
-                        st.error(err)
+                    # 解压逻辑
+                    if source_file.name.endswith('.zip'):
+                        zip_path = os.path.join(temp_dir, "upload.zip")
+                        with open(zip_path, "wb") as f: f.write(source_file.getvalue())
+                        with zipfile.ZipFile(zip_path, 'r') as z: z.extractall(temp_dir)
                     else:
-                        # 保存配置
-                        yaml_path = os.path.join(work_dir, "meta.yaml")
-                        with open(yaml_path, "w", encoding="utf-8") as f: f.write(yaml_content)
+                        with open(os.path.join(temp_dir, source_file.name), "wb") as f: f.write(source_file.getvalue())
+                    
+                    # 找 MD
+                    md_path = None
+                    work_dir = temp_dir
+                    for r, d, f in os.walk(temp_dir):
+                        for file in f:
+                            if file.endswith(".md"): 
+                                md_path = os.path.join(r, file)
+                                work_dir = r
+                                break
+                    
+                    if md_path:
+                        # 写入 YAML
+                        with open(os.path.join(work_dir, "meta.yaml"), "w", encoding="utf-8") as f: f.write(yaml_content)
                         
-                        # 1. 转换 Word (用于下载)
-                        cmd_template = []
+                        # 写入模板
+                        cmd_opts = []
                         if template_file:
                             tpl_path = os.path.join(work_dir, "template.docx")
                             with open(tpl_path, "wb") as f: f.write(template_file.getvalue())
-                            cmd_template = [f"--reference-doc={tpl_path}"]
+                            cmd_opts = [f"--reference-doc={tpl_path}"]
 
-                        output_docx = os.path.join(work_dir, "final.docx")
-                        cmd_docx = [
-                            "pandoc", md_path,
-                            f"--metadata-file={yaml_path}",
+                        # ==========================================
+                        # 🌟 核心步骤 1: 生成 DOCX (Pandoc)
+                        # ==========================================
+                        docx_out = os.path.join(work_dir, "output.docx")
+                        cmd_build = [
+                            "pandoc", md_path, 
+                            "--metadata-file=meta.yaml", 
                             "--filter", CROSSREF_CMD,
-                            "--resource-path=.",
-                            "-o", output_docx
-                        ]
-                        if opt_toc: cmd_docx.append("--toc")
-                        if opt_num: cmd_docx.append("--number-sections")
-                        cmd_docx.extend(cmd_template)
+                            "--resource-path=.", # 确保图片能找到
+                            "-o", docx_out
+                        ] + cmd_opts
                         
-                        subprocess.run(cmd_docx, cwd=work_dir)
-                        if os.path.exists(output_docx):
-                            with open(output_docx, "rb") as f:
-                                st.session_state['docx_data'] = f.read()
-
-                        # 2. 转换 HTML (用于全屏预览)
-                        cmd_html = [
-                            "pandoc", md_path,
-                            f"--metadata-file={yaml_path}",
-                            "--filter", CROSSREF_CMD,
-                            "--to", "html5",
-                            "--embed-resources",
-                            "--standalone",
-                            "--mathjax",
-                            "--css", "https://cdn.jsdelivr.net/npm/github-markdown-css/github-markdown.min.css"
-                        ]
-                        if opt_toc: cmd_html.append("--toc")
-                        if opt_num: cmd_html.append("--number-sections")
-
-                        res_html = subprocess.run(cmd_html, cwd=work_dir, capture_output=True, text=True)
-                        if res_html.returncode == 0:
-                            # 拼接：A4 CSS + HTML + Zoom JS
-                            st.session_state['preview_html'] = A4_CSS + res_html.stdout + ZOOM_SCRIPT
-                            # 切换视图状态！
-                            st.session_state['view_mode'] = 'preview'
-                            st.rerun() # 强制刷新页面进入预览模式
+                        subprocess.run(cmd_build, cwd=work_dir)
+                        
+                        if os.path.exists(docx_out):
+                            with open(docx_out, "rb") as f: st.session_state['docx_data'] = f.read()
+                            
+                            # ==========================================
+                            # 🌟 核心步骤 2: DOCX -> HTML (逆向预览)
+                            # ==========================================
+                            # 使用 Pandoc 把刚才生成的 Word 转回 HTML
+                            # --embed-resources: 把 Word 里的图片扣出来嵌进 HTML
+                            cmd_preview = [
+                                "pandoc", docx_out, # 输入刚才的 Word
+                                "-f", "docx",       # 强制指定输入格式为 docx
+                                "-t", "html5",      # 输出为 html
+                                "--embed-resources", 
+                                "--standalone",
+                                "--mathjax"
+                            ]
+                            
+                            res_html = subprocess.run(cmd_preview, cwd=work_dir, capture_output=True, text=True)
+                            
+                            if res_html.returncode == 0:
+                                # 包装一下 HTML，加上 A4 样式
+                                final_html = A4_CSS + '<div class="markdown-body">' + res_html.stdout + '</div>' + ZOOM_SCRIPT
+                                st.session_state['preview_html'] = final_html
+                                st.session_state['view_mode'] = 'preview'
+                                st.rerun()
+                            else:
+                                st.error(f"生成预览失败: {res_html.stderr}")
                         else:
-                            st.error(f"预览生成失败: {res_html.stderr}")
+                            st.error("Word 生成失败")
+        else:
+            st.error("请先上传文件")
 
-# ==========================================
-# 🖥️ 视图 2：全屏预览页 (沉浸模式)
-# ==========================================
+# ----------------- 视图 2: 预览页 -----------------
 elif st.session_state['view_mode'] == 'preview':
-    
-    # --- 侧边栏：操作区 ---
     with st.sidebar:
-        st.header("操作栏")
-        
-        # 返回按钮
-        if st.button("⬅️ 返回修改", use_container_width=True):
+        if st.button("⬅️ 返回修改"):
             st.session_state['view_mode'] = 'setup'
             st.rerun()
-            
         st.divider()
-        
-        # 下载按钮
         if st.session_state['docx_data']:
-            fname = st.session_state['file_name']
-            if not fname.endswith(".docx"): fname += ".docx"
-            
-            st.download_button(
-                label="📥 下载 Word 文档",
-                data=st.session_state['docx_data'],
-                file_name=fname,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                type="primary",
-                use_container_width=True
-            )
-        
-        st.info("提示：右侧为 HTML 仿真预览，排版与 Word 可能略有差异，但内容与公式一致。")
-        
-        # 高度控制
-        st.divider()
-        iframe_height = st.slider("预览窗口高度", 800, 3000, 1200)
+            fn = output_name if output_name.endswith(".docx") else output_name+".docx"
+            st.download_button("📥 下载 Word 文档", st.session_state['docx_data'], fn, type="primary")
+            st.info("提示：此预览是由生成的 Word 文档反向转换而来，所见即所得。")
 
-    # --- 主区域：全屏 HTML ---
-    # 移除顶部的 padding，让预览更沉浸
-    st.markdown("""
-        <style>
-               .block-container { padding-top: 1rem; padding-bottom: 0rem; }
-               header { visibility: hidden; }
-        </style>
-        """, unsafe_allow_html=True)
-
+    # 隐藏 Header 并展示全屏 HTML
+    st.markdown("""<style>.block-container { padding-top: 1rem; padding-bottom: 0rem; } header { visibility: hidden; }</style>""", unsafe_allow_html=True)
     if st.session_state['preview_html']:
-        components.html(st.session_state['preview_html'], height=iframe_height, scrolling=True)
-    else:
-        st.error("预览数据丢失，请返回重新生成。")
+        components.html(st.session_state['preview_html'], height=1200, scrolling=True)
